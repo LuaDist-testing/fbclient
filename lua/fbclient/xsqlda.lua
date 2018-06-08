@@ -1,9 +1,9 @@
 --[=[
-	XSQLDA & XSQLVAR structures: the record & field buffers.
+	XSQLDA & XSQLVAR structures: the record & field buffers
 
 	new(xsqlvar_count) -> xsqlda_buf
 	decode(xsqlda_buf) -> xsqlvar_allocated_count, xsqlvar_used_count
-	xsqlvars(xsqlda_buf) -> iterator() -> i,xsqlvar_ptr
+	xsqlvar_get(xsqlda_buf, index) -> xsqlvar_ptr
 	xsqlvar_alloc(xsqlvar_ptr, [xs_meta]) -> xsqlvar_t
 
 	xsqlvar.column_name
@@ -14,6 +14,8 @@
 	xsqlvar.sv -> status vector
 	xsqlvar.dbh -> database handle
 	xsqlvar.trh -> transaction handle
+	xsqlvar.sqldata_buf -> alien buffer containing the actual data
+	xsqlvar.buflen -> size of sqldata_buf
 
 	USAGE: to become an xsqlvar object, the xsqlvar_t must be wrapped with xsqlvar.wrap() (see wrapper.lua).
 
@@ -39,6 +41,7 @@ local sqltypes = {
 	SQL_TYPE_TIME   = 560,
 	SQL_TYPE_DATE   = 570,
 	SQL_INT64       = 580,
+	SQL_NULL        = 32766, --Firebird 2.5+
 }
 
 local sqlsubtypes = {
@@ -58,14 +61,15 @@ local sqltype_lookup = index(sqltypes)
 local sqlsubtype_lookup = index(sqlsubtypes)
 
 --version,sqlda_name,sqlda_byte_count,xsqlvar_allocated_count,xsqlvar_used_count,XSQLVAR1,XSQLVAR2,...
-local XSQLDA = '!4hc8ihh'
-local ISC_NAME = 'hc32'-- only 32 lousy characters, so '80s
---type,scale,subtype,len,sqldata*,sqlind*,#sqlname,sqlname,#relname,relname,#ownname,ownname,#aliasname,aliasname
-local XSQLVAR = '!4hhhhpp'..ISC_NAME..ISC_NAME..ISC_NAME..ISC_NAME
+local XSQLDA = '!hc8ihh'
+local ISC_NAME = 'hc32'--only 32 lousy characters, so '80s
+--sqltype,scale,subtype,len,sqldata*,sqlind*,#sqlname,sqlname,#relname,relname,#ownname,ownname,#aliasname,aliasname
+local XSQLVAR = '!hhhhpp'..ISC_NAME..ISC_NAME..ISC_NAME..ISC_NAME
+local XSQLVAR_SQLTYPE_OFFSET = 1
 local XSQLVAR_SQLDATA_OFFSET = struct.offset(XSQLVAR,5)
 local XSQLVAR_SQLIND_OFFSET  = struct.offset(XSQLVAR,6)
 
--- you need these for most of dsql_*() functions. so let's get you one.
+--you need these for most of dsql_*() functions. so let's get you one.
 function new(xsqlvar_count)
 	assert(xsqlvar_count >= 0)
 	local buf = alien.buffer(struct.size(XSQLDA)+xsqlvar_count*struct.size(XSQLVAR))
@@ -73,38 +77,29 @@ function new(xsqlvar_count)
 	return buf
 end
 
--- call this after isc_dsql_prepare() or isc_dsql_describe*() to find out how many actual
--- columns/parameters are needed. if used_count < alloc_count, you'll need to reallocate the xsqlda.
+--call this after isc_dsql_prepare() or isc_dsql_describe*() to find out how many actual
+--columns/parameters are needed. if used_count < alloc_count, you'll need to reallocate the xsqlda.
 function decode(xsqlda_buf)
 	local
-		version,			-- 1
-		sqlda_name,			-- reserved
-		sqlda_byte_count,	-- reserved
+		version,			--1
+		sqlda_name,			--reserved
+		sqlda_byte_count,	--reserved
 		xsqlvar_allocated_count,
 		xsqlvar_used_count = struct.unpack(XSQLDA, xsqlda_buf, struct.size(XSQLDA))
-
 	return xsqlvar_allocated_count, xsqlvar_used_count
 end
 
--- returns a reusable, self-contained iterator of i,next_xsqlvar_ptr (which is a pointer inside the xsqlda)
-function xsqlvars(xsqlda_buf)
-	local alloc, used = decode(xsqlda_buf)
-	assert(used <= alloc) -- can't iterate unless there are enough buffers
-	return function(_,i)
-		i=i and i+1 or 1
-		if i > used then
-			return nil
-		else
-			return i,xsqlda_buf:topointer(struct.size(XSQLDA)+(i-1)*struct.size(XSQLVAR)+1)
-		end
-	end
+function xsqlvar_get(xsqlda_buf,i)
+	return xsqlda_buf:topointer(1+struct.size(XSQLDA)+(i-1)*struct.size(XSQLVAR))
 end
 
--- internal hepler that computes buflen for a certain sqltype,sqllen
+--internal hepler that computes buflen for a certain sqltype,sqllen
 local function sqldata_buflen(sqltype, sqllen)
 	local buflen = sqllen
 	if sqltype == 'SQL_VARYING' then
 		buflen = sqllen+SHORT_SIZE
+	elseif sqltype == 'SQL_NULL' then
+		buflen = 0
 	end
 	return buflen
 end
@@ -121,15 +116,15 @@ function xsqlvar_alloc(xsqlvar_ptr)
 	len_ownname, ownname,
 	len_aliasname, aliasname = struct.unpack(XSQLVAR, xsqlvar_ptr, struct.size(XSQLVAR))
 
-	-- allow_null tells you if you'll have to allocate an sqlind buffer or not (for tube computers)
-	local allow_null = sqltype%2==1 -- yea, odd (that is, the flag is kept in bit 1)
-	sqltype = sqltype_lookup[sqltype - (allow_null and 1 or 0)]
-	assert(sqltype)
+	--allow_null tells us if the column allows null values, and so an sqlind buffer is needed
+	--to receive the null flag. thing is however that you can have null values on a not-null
+	--column under some circumstances, so we're always allocating an sqlind buffer.
+	local allow_null = sqltype%2==1 --this flag is kept in bit 1
+	sqltype = sqltype - (allow_null and 1 or 0)
+	local sqltype_code = sqltype
+	sqltype = assert(sqltype_lookup[sqltype])
 	if sqltype == 'SQL_BLOB' then
-		subtype = sqlsubtype_lookup[subtype]
-		assert(subtype)
-	else
-		subtype = nil
+		subtype = assert(sqlsubtype_lookup[subtype])
 	end
 
 	sqlname = len_sqlname > 0 and sqlname:sub(1,len_sqlname) or nil
@@ -138,20 +133,21 @@ function xsqlvar_alloc(xsqlvar_ptr)
 	aliasname = len_aliasname > 0 and aliasname:sub(1,len_aliasname) or nil
 
 	local buflen = sqldata_buflen(sqltype, sqllen)
-	assert(buflen > 0)
-	local sqldata_buf = alien.buffer(buflen)
-	local sqlind_buf
-	if allow_null then
-		sqlind_buf = alien.buffer(INT_SIZE)
-		sqlind_buf:set(1,-1,'int') --initialize to null
-	else
-		alien.memset(sqldata_buf,0,buflen) --initialize to zero (less ideal than null)
+	local sqldata_buf
+	if buflen > 0 then --SQL_NULL type has buflen 0 so no point allocating a databuf for it
+		sqldata_buf = alien.buffer(buflen)
+		alien.memset(sqldata_buf,0,buflen) --important in absence of a null flag!
 	end
 
-	--TODO: I need to write to a pointer at an offset directly without making garbage!
+	local sqlind_buf = alien.buffer(INT_SIZE)
+	sqlind_buf:set(1,-1,'int') --initialize the null flag
+
 	local tmpbuf = alien.buffer(xsqlvar_ptr)
 	tmpbuf:set(XSQLVAR_SQLDATA_OFFSET, sqldata_buf, 'pointer')
 	tmpbuf:set(XSQLVAR_SQLIND_OFFSET, sqlind_buf, 'pointer')
+	--set the allow_null bit, otherwise the server won't touch the sqlind
+	--buffer on columns that have the bit clear.
+	tmpbuf:set(XSQLVAR_SQLTYPE_OFFSET, sqltype_code+1, 'short')
 
 	local xs = {
 		sqltype = sqltype, --how is SQLDATA encoded

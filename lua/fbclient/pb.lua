@@ -1,5 +1,5 @@
 --[[
-	generic encoder frunction for PBs (Parameter Blocks, eg. TPB, DPB, etc.)
+	Generic encoder frunction for PBs (Parameter Blocks, eg. TPB, DPB, etc.)
 
 	encode(options_t,codes,encoders) -> encoded_options_string
 	encode_*(v) -> encoded option string

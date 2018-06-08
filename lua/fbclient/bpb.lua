@@ -1,5 +1,5 @@
 --[=[
-	BPB (Blob Parameter Block) structure: for using blob filters when reading/writing blobs.
+	BPB (Blob Parameter Block) structure: for using blob filters when reading/writing blobs
 
 	encode(bpb_options_t) -> BPB encoded string.
 
@@ -12,15 +12,13 @@ module(...,require 'fbclient.init')
 local pb = require 'fbclient.pb'
 
 local codes = {
-	isc_bpb_source_type               = 1, --signed byte: subtype at application endpoint; mandatory
-	isc_bpb_target_type               = 2, --signed byte: subtype at database endpoint; mandatory
-	isc_bpb_type                      = 3, --blob type: isc_bpb_type_segmented or stream, default is segmented
-	isc_bpb_source_interp             = 4, --source charset; default = ?
-	isc_bpb_target_interp             = 5, --target charset; default = ?
-	isc_bpb_filter_parameter          = 6, --filters convert one blob type to another. the parameter could
-										   --hold an encrypt/decrypt key. since there's no SQL language support
-										   --for blob filtering, the question is moot.
-	isc_bpb_storage                   = 7, --blob storage: optional, isc_bpb_storage_main or temp, default is main
+	isc_bpb_source_type               = 1, --signed byte: subtype at application endpoint; default = ?
+	isc_bpb_target_type               = 2, --signed byte: subtype at database endpoint; default = ?
+	isc_bpb_type                      = 3, --blob type: isc_bpb_type_segmented or _stream, default is _segmented
+	isc_bpb_source_interp             = 4, --charset at application endpoint; default = ?
+	isc_bpb_target_interp             = 5, --charset at database endpoint; default = ?
+	isc_bpb_filter_parameter          = 6, --filters convert one blob type to another; doc on filters is sparse at best
+	isc_bpb_storage                   = 7, --blob storage: optional, isc_bpb_storage_main or _temp, default is _main
 }
 
 local isc_bpb_type_enum = {

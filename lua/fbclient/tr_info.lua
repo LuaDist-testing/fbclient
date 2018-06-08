@@ -1,5 +1,5 @@
 --[=[
-	TR_INFO: request info about a running transaction.
+	TR_INFO: request information about an active transaction
 	this is the aux. library to encode the request buffer and decode the reply buffer.
 
 	encode(options_t) -> encoded options string

@@ -1,6 +1,6 @@
 --[=[
-	fbclient library class wrapper.
-	based on wrapper.lua and friends.
+	Fbclient objectual wrapper
+	Based on wrapper.lua and friends.
 
 	*** ATTACHMENTS ***
 	attach(database,[username],[password],[client_charset],[role_name],[dpb_options_t],[fbapi_object | libname],[at_class]) -> attachment
@@ -11,8 +11,9 @@
 	create_database_sql(create_database_sql,[fbapi_object | libname],[at_class]) -> attachmenet
 	attachment:clone() -> new attachment on the same fbapi object
 	attachment:close()
+	attachment:close_all()
 	attachment:closed() -> true|false
-	attachment:drop_database()
+	attachment:drop()
 	attachment:cancel_operation(cancel_opt_s='fb_cancel_raise')
 
 	*** ATTACHMENT INFO ***
@@ -33,11 +34,12 @@
 	attachment:connected_users() -> {username1,...}
 	attachment:read_only() -> true|false
 	attachment:creation_date() -> time_t
-	attachment:page_contents(page_number) -> s
+	attachment:page_contents(page_number) -> s; fb 2.5+
 	attachment:table_counts() -> {[table_id]={read_seq_count=n,read_idx_count=n,...}}
 
 	*** TRANSACTIONS ***
 	start_transaction_ex({[attachment1]={tbp_options_t} | true],...},[tr_class]) -> transaction
+	attachment:start_transaction([access],[isolation],[lock_timeout],[tpb_opts],[tr_class]) -> transaction
 	attachment:start_transaction_ex([tpb_options_t],[tr_class]) -> transaction
 	attachment:start_transaction_sql(set_transaction_sql,[tr_class]) -> transaction
 	transaction:commit()
@@ -61,8 +63,9 @@
 	transaction:prepare(sql, [st_class]) -> statement
 	statement:close()
 	statement:closed() -> true|false
-	statement:run()
+	statement:run() -> statement (returned for convenience)
 	statement:fetch() -> true|false; true = OK, false = EOF.
+	statement:set_cursor_name(name); can only be called after each statement:run()
 	statement:close_cursor()
 	transaction:close_all_statements()
 	attachment:close_all_statements()
@@ -76,18 +79,27 @@
 
 	*** XSQLVARS ***
 	statement.params -> params_t; params_t[i] -> xsqlvar (xsqlvar methods in xsqlvar.lua and friends)
-	statement.columns -> columns_t; columns_t[i|alias_name] -> xsqlvar
+	statement.columns -> columns_t; columns_t[col_num|col_name] -> xsqlvar
 
 	*** SUGAR COATING ***
-	attachment:exec(sql,p1,p2,...) -> row_iterator() -> i,v1,v2,...
+	attachment:exec(sql,p1,p2,...) -> row_iterator() -> st,v1,v2,...
 	attachment:exec_immediate(sql)
-	transaction:exec_on(attachment,sql,p1,p2,...) -> row_iterator() -> i,v1,v2,...
-	transaction:exec(sql,p1,p2,...) -> row_iterator() -> i,v1,v2,...
-	statement:exec(v1,v2,...) -> row_iterator() -> i,v1,v2,...
-	statement:setparams(v1,v2,...)
-	statement:values() -> v1,v2
-	statement.values[i|alias_name] -> value
-	#statement.values == #statement.params
+	transaction:exec_on(attachment,sql,p1,p2,...) -> row_iterator() -> st,v1,v2,...
+	transaction:exec(sql,p1,p2,...) -> row_iterator() -> st,v1,v2,...
+	statement:exec(p1,p2,...) -> row_iterator() -> col_num,v1,v2,...
+	statement:setparams(p1,p2,...) -> statement (returned for convenience)
+	statement:getvalues() -> v1,v2,...,vlast
+	statement:getvalues([col_num|col_name,...]) -> vi,vj,...
+	statement.values[col_num|col_name] -> statement.columns[col_num]:get()
+	statement:values(...) -> statement:getvalues(...)
+	statement:row() -> { col_name = val,... }
+
+	*** ERROR HANDLING ***
+	attachment:sqlcode() -> n; deprecated in favor of sqlstate() in fb 2.5+
+	attachment:sqlstate() -> s; SQL-2003 compliant SQLSTATE code; fbclient 2.5+ firebird 2.5+
+	attachment:sqlerror() -> sql error message based on sqlcode()
+	attachment:errors() -> {err_msg1,...}
+	attachment:full_status() -> s;
 
 	*** OBJECT STATE ***
 	attachment.fbapi -> fbclient binding object, as returned by fbclient.binding.new(libname)
@@ -97,6 +109,7 @@
 	statement.fbapi -> fbclient binding object (attachment's fbapi)
 	statement.sv -> status_vector object (attachment's sv)
 
+	attachment.attachments -> hash of all active attachments
 	attachment.transactions -> hash of active transactions on this attachment
 	attachment.statements -> hash of active statements on this attachment
 	transaction.attachments -> hash of attachments this transaction spans
@@ -114,12 +127,11 @@
 	- auxiliary functionality resides in other modules which are NOT require()'d automatically:
 		- blob.lua              xsqlvar methods for blob support
 	- see test_class.lua for complete coverage of all the functionality.
+	- tostring(statement:values.COL_NAME) works for all data types.
 
 	*** LIMITATIONS ***
 	- dialect support is burried, and only dialect 3 databases are supported.
-	- unpack(statement.values) -> v1,v2,... doesn't work in Lua 5.1 because statement.values is a
-	userdata; use statement:values() instead; ipairs(st.values) doesn't work either but you can use
-	for i=1,#st.values do ...; neither does pairs(st.values) work but that's less useful.
+	- st.values is only callable and indexable (cant' do #, pairs(), or ipairs() on it)
 
 ]=]
 
@@ -130,21 +142,35 @@ local oo = require 'loop.base' --we use LOOP for classes so you can extend them 
 local binding = require 'fbclient.binding' --using the wrapper requires a binding object
 local svapi = require 'fbclient.status_vector' --using the wrapper requires a status_vector object
 local xsqlda = require 'fbclient.xsqlda' --for preallocating xsqlda buffers
+require 'fbclient.sql_info' --st:run() calls api.dsql_info()
 
 attachment_class = oo.class {
-	statement_handle_pool_limit = 0, --change this if you're sure to be using fbclient 2.5+
+	attachments = {},
+	prealloc_param_count = 6, --pre-allocate xsqlda on prepare() to avoid a second isc_describe_bind() API call
+	prealloc_column_count = 20, --pre-allocate xsqlda on prepare() to avoid a second isc_describe() API call
+	statement_handle_pool_limit = 0, --in fb 2.5+ statement handles can be recycled, so you can increase/remove this
+	cache_prepared_statements = true, --reuse prepared statements that have exactly the same sql text
+	__type = 'fbclient attachment',
+	__tostring = function(at) return xtype(at)..(at.database and ' to '..at.database or '') end,
 }
-transaction_class = oo.class()
-statement_class = oo.class()
+
+transaction_class = oo.class {
+	__type = 'fbclient transaction',
+	__tostring = function(tr) return xtype(tr) end,
+}
+
+statement_class = oo.class {
+	__type = 'fbclient statement',
+	__tostring = function(st) return xtype(st) end,
+}
 
 local function create_attachment_object(fbapi, at_class)
 	at_class = at_class or attachment_class
+	fbapi = xtype(fbapi) == 'alien library' and fbapi or binding.new(fbapi or 'fbclient')
 	local at = at_class {
-		fbapi = xtype(fbapi) == 'fbclient.binding' and fbapi or binding.new(fbapi or 'fbclient'),
+		fbapi = fbapi,
 		sv = svapi.new(),
 		statement_handle_pool = {},
-		prealloc_param_count = 6, --pre-allocate xsqlda on prepare() to avoid a second isc_describe_bind() API call
-		prealloc_column_count = 20, --pre-allocate xsqlda on prepare() to avoid a second isc_describe() API call
 		transactions = {}, --transactions spanning this attachment
 		statements = {}, --statements made against this attachment
 	}
@@ -163,13 +189,14 @@ end
 function attach_ex(database, opts, fbapi, at_class)
 	local at = create_attachment_object(fbapi, at_class)
 	at.handle = api.db_attach(at.fbapi, at.sv, database, opts)
-	at.database = database --for cloning
+	at.attachments[at] = true
+	at.database = database --for cloning and __tostring
 	at.dpb_options = deep_copy(opts) --for cloning
 	at.allow_cloning = true
 	return at
 end
 
---clone an attachment object reusing the fbapi object of the source attachment
+--start a new connection reusing the fbapi object of the source connection.
 function attachment_class:clone()
 	assert(self.handle, 'attachment closed')
 	assert(self.allow_cloning, 'cloning not available on this attachment\n'..
@@ -179,6 +206,7 @@ function attachment_class:clone()
 	at.dpb_options = deep_copy(self.dpb_options)
 	at.allow_cloning = true
 	at.handle = api.db_attach(at.fbapi, at.sv, at.database, at.dpb_options)
+	at.attachments[at] = true
 	return at
 end
 
@@ -188,7 +216,7 @@ function create_database(database, user, pass, client_charset, role, db_charset,
 	opts.isc_dpb_password = pass
 	opts.isc_dpb_lc_ctype = client_charset
 	opts.isc_dpb_sql_role_name = role
-	opts.isc_dpb_set_db_sql_dialect = 3
+	opts.isc_dpb_sql_dialect = 3
 	opts.isc_dpb_set_db_charset = db_charset
 	opts.isc_dpb_page_size = page_size
 	return create_database_ex(database, opts, fbapi, at_class)
@@ -197,28 +225,61 @@ end
 function create_database_ex(database, opts, fbapi, at_class)
 	local at = create_attachment_object(fbapi, at_class)
 	at.handle = api.db_create(at.fbapi, at.sv, database, opts)
+	at.attachments[at] = true
+	at.database = database --for __tostring
 	return at
 end
 
 function create_database_sql(sql, fbapi, at_class)
+	asserts(type(sql)=='string', 'arg#1 string expected, got %s',type(sql))
 	local at = create_attachment_object(fbapi, at_class)
 	at.handle = api.db_create_sql(at.fbapi, at.sv, sql, 3)
+	at.attachments[at] = true
 	return at
 end
 
 function attachment_class:close()
-	assert(self.handle, 'attachment closed')
+	assert(self.handle, 'attachment already closed')
 	self:rollback_all()
 	api.db_detach(self.fbapi, self.sv, self.handle)
 	self.handle = nil
+	self.attachments[self] = nil
 end
 
-function attachment_class:drop_database()
+function attachment_class:close_all()
+	while next(self.attachments) do
+		next(self.attachments):close()
+	end
+end
+
+function attachment_class:drop()
 	assert(self.handle, 'attachment closed')
 	self:rollback_all()
 	api.db_drop(self.fbapi, self.sv, self.handle)
 	self.handle = nil
+	self.attachments[self] = nil
 end
+
+function attachment_class:sqlcode()
+	return svapi.sqlcode(self.fbapi, self.sv)
+end
+
+function attachment_class:sqlstate()
+	return svapi.sqlstate(self.fbapi, self.sv)
+end
+
+function attachment_class:sqlerror()
+	return svapi.sqlerror(self.fbapi, self:sqlcode())
+end
+
+function attachment_class:errors()
+	return svapi.full_status(self.fbapi, self.sv)
+end
+
+function attachment_class:full_status()
+	return svapi.full_status(self.fbapi, self.sv)
+end
+
 
 function attachment_class:cancel_operation(opt)
 	assert(self.handle, 'attachment closed')
@@ -341,7 +402,6 @@ function attachment_class:table_counts()
 	return rt
 end
 
---all attachments involved in a multi-database transaction should run on the same OS thread!
 function start_transaction_ex(opts, tr_class)
 	tr_class = tr_class or transaction_class
 	assert(next(opts), 'at least one attachment is necessary to start a transaction')
@@ -352,8 +412,8 @@ function start_transaction_ex(opts, tr_class)
 		tpb_opts[at.handle] = opt
 	end
 	local tr = tr_class {
-		fbapi = next(attachments).fbapi, --use the fbapi of whatever attachment
-		sv = next(attachments).sv, --use the sv of whatever attachment
+		fbapi = next(attachments).fbapi, --use the fbapi of one of the attachments
+		sv = next(attachments).sv, --use the sv of one of the attachments
 		attachments = attachments,
 		statements = {},
 	}
@@ -364,8 +424,8 @@ function start_transaction_ex(opts, tr_class)
 	return tr
 end
 
-function attachment_class:start_transaction_ex(opts, tr_class)
-	return start_transaction_ex({[self]=opts or true}, tr_class)
+function attachment_class:start_transaction_ex(tpb_opts, tr_class)
+	return start_transaction_ex({[self]=tpb_opts or true}, tr_class)
 end
 
 function attachment_class:start_transaction_sql(sql, tr_class)
@@ -382,6 +442,30 @@ function attachment_class:start_transaction_sql(sql, tr_class)
 	return tr
 end
 
+function attachment_class:start_transaction(access, isolation, lock_timeout, tpb_opts, tr_class)
+	local tpb_opts = tpb_opts or {}
+	asserts(not access
+				or access == 'read'
+				or access == 'write',
+					'arg#1 "read" or "write" expected, got "%s"',access)
+	asserts(not isolation
+				or isolation == 'consistency'
+				or isolation == 'concurrency'
+				or isolation == 'read commited'
+				or isolation == 'read commited, no record version',
+					'arg#2 "consistency", "concurrency", "read commited" or "read commited, no record version" expected, got "%s"', isolation)
+	tpb_opts.isc_tpb_read = access == 'read' or nil
+	tpb_opts.isc_tpb_write = access == 'write' or nil
+	tpb_opts.isc_tpb_consistency = isolation == 'consistency' or nil
+	tpb_opts.isc_tpb_concurrency = isolation == 'concurrency' or nil
+	tpb_opts.isc_tpb_read_committed = isolation == 'read commited' or isolation == 'read commited, no record version' or nil
+	tpb_opts.isc_tpb_rec_version = isolation == 'read commited' or nil
+	tpb_opts.isc_tpb_wait = lock_timeout and lock_timeout > 0 or nil
+	tpb_opts.isc_tpb_nowait = lock_timeout == 0 or nil
+	tpb_opts.isc_tpb_lock_timeout = lock_timeout and lock_timeout > 0 and lock_timeout or nil
+	return self:start_transaction_ex(tpb_opts, tr_class)
+end
+
 function attachment_class:commit_all()
 	while next(self.transactions) do
 		next(self.transactions):commit()
@@ -394,26 +478,32 @@ function attachment_class:rollback_all()
 	end
 end
 
-function transaction_class:commit()
+function transaction_class:close(action)
+	local action = action or 'commit'
 	assert(self.handle, 'transaction closed')
 	self:close_all_statements()
-	api.tr_commit(self.fbapi, self.sv, self.handle)
-	for at in pairs(self.attachments) do
+	if action == 'commit' then
+		api.tr_commit(self.fbapi, self.sv, self.handle)
+	elseif action == 'rollback' then
+		api.tr_rollback(self.fbapi, self.sv, self.handle)
+	else
+		asserts(false, 'arg#1 "commit" or "rollback" expected, got %s', action)
+	end
+	local at = next(self.attachments)
+	while at do
 		at.transactions[self] = nil
+		self.attachments[at] = nil
+		at = next(self.attachments)
 	end
 	self.handle = nil
-	self.attachments = nil
+end
+
+function transaction_class:commit()
+	self:close('commit')
 end
 
 function transaction_class:rollback()
-	assert(self.handle, 'transaction closed')
-	self:close_all_statements()
-	api.tr_rollback(self.fbapi, self.sv, self.handle)
-	for at in pairs(self.attachments) do
-		at.transactions[self] = nil
-	end
-	self.handle = nil
-	self.attachments = nil
+	self:close('rollback')
 end
 
 function transaction_class:commit_retaining()
@@ -446,10 +536,6 @@ function transaction_class:exec_immediate(sql)
 	return self:exec_immediate_on(next(self.attachments), sql)
 end
 
-function statement_values_mt_len(t) return #getmetatable(t).statement.columns end
-function statement_values_mt_index(t,k) return getmetatable(t).statement.columns[k]:get() end
-function statement_values_mt_call(t) return xunpack(t) end
-
 function transaction_class:prepare_on(attachment, sql, st_class)
 	assert(self.handle, 'transaction closed')
 	st_class = st_class or statement_class
@@ -462,7 +548,7 @@ function transaction_class:prepare_on(attachment, sql, st_class)
 
 	--grab a handle from the statement handle pool of the attachment, or make a new one.
 	local spool = attachment.statement_handle_pool
-	if count(spool,1) > 0 then
+	if next(spool) then
 		st.handle = next(spool)
 		spool[st.handle] = nil
 	else
@@ -474,17 +560,24 @@ function transaction_class:prepare_on(attachment, sql, st_class)
 						xsqlda.new(attachment.prealloc_param_count),
 						xsqlda.new(attachment.prealloc_column_count))
 
+	st.values = setmetatable({}, {
+		__index = function(t,k) return st.columns[k]:get() end,
+		__call = function(t,self,...) return self:getvalues(...) end,
+	})
+
 	attachment.statements[st] = true
 	self.statements[st] = true
 
-	--setup the values virtual table; we make it via newproxy() so we can set __len() on it.
-	st.values = newproxy(true)
-	local meta = getmetatable(st.values)
-	meta.statement = st
-	meta.__type = 'fbclient.values'
-	meta.__len = statement_values_mt_len
-	meta.__index = statement_values_mt_index
-	meta.__call = statement_values_mt_call
+	--make and record the decision on how the statement should be executed and results be fetched.
+	--NOTE: there's no official way to do this, I just did what made sense, it may be wrong.
+	st.expect_output = #st.columns > 0
+	st.expect_cursor = false
+	if st.expect_output then
+		st.expect_cursor = ({
+			isc_info_sql_stmt_select = true,
+			isc_info_sql_stmt_select_for_upd = true
+		})[st:type()]
+	end
 
 	return st
 end
@@ -494,7 +587,7 @@ function transaction_class:prepare(sql, st_class)
 	return self:prepare_on(next(self.attachments), sql, st_class)
 end
 
---NOTE: this function should work fine in the absence of the blob module!
+--NOTE: this function works (does nothing) even if the blob module isn't loaded!
 function statement_class:close_all_blobs()
 	for i,xs in ipairs(self.params) do
 		if xs.blob_handle then
@@ -509,19 +602,23 @@ function statement_class:close_all_blobs()
 end
 
 function statement_class:close()
-	assert(self.handle, 'statement closed')
+	assert(self.handle, 'statement already closed')
 	self:close_all_blobs()
 	self:close_cursor()
+
 	--try unpreparing the statement handle instead of freeing it, and drop it into the handle pool.
 	local spool = self.attachment.statement_handle_pool
 	local limit = self.attachment.statement_handle_pool_limit
-	if count(spool, limit) < limit then
+	if not limit or count(spool, limit) < limit then
 		api.dsql_unprepare(self.fbapi, self.sv, self.handle)
 		spool[self.handle] = true
 	else
 		api.dsql_free_statement(self.fbapi, self.sv, self.handle)
 	end
 
+	self.expect_output = nil
+	self.expect_cursor = nil
+	self.already_fetched = nil
 	self.attachment.statements[self] = nil
 	self.transaction.statements[self] = nil
 	self.handle = nil
@@ -545,18 +642,33 @@ function statement_class:run()
 	assert(self.handle, 'statement closed')
 	self:close_all_blobs()
 	self:close_cursor()
-	api.dsql_execute(self.fbapi, self.sv, self.transaction.handle, self.handle, self.params)
-	self.cursor_open = true
+	if self.expect_output and not self.expect_cursor then
+		api.dsql_execute_returning(self.fbapi, self.sv, self.transaction.handle, self.handle, self.params, self.columns)
+		self.already_fetched = true
+	else
+		api.dsql_execute(self.fbapi, self.sv, self.transaction.handle, self.handle, self.params)
+		self.cursor_open = self.expect_cursor
+	end
+	return self
+end
+
+function statement_class:set_cursor_name(name)
+	api.dsql_set_cursor_name(self.fbapi, self.sv, self.handle, name)
 end
 
 function statement_class:fetch()
 	assert(self.handle, 'statement closed')
 	self:close_all_blobs()
-	local ok = api.dsql_fetch(self.fbapi, self.sv, self.handle, self.columns)
-	if not ok then
-		self:close_cursor()
+	local fetched = self.already_fetched or false
+	if fetched then
+		self.already_fetched = nil
+	elseif self.cursor_open then
+		fetched = api.dsql_fetch(self.fbapi, self.sv, self.handle, self.columns)
+		if not fetched then
+			self:close_cursor()
+		end
 	end
-	return ok
+	return fetched
 end
 
 function statement_class:close_cursor()
@@ -598,6 +710,33 @@ function statement_class:setparams(...)
 	for i,p in ipairs(self.params) do
 		p:set(select(i,...))
 	end
+	return self
+end
+
+function statement_class:getvalues(...)
+	if not select(1,...) then
+		local t = {}
+		for i,col in ipairs(self.columns) do
+			t[i] = col:get()
+		end
+		return unpack(t,1,#self.columns)
+	else
+		local t,n = {},select('#',...)
+		for i=1,n do
+			t[i] = self.columns[select(i,...)]:get()
+		end
+		return unpack(t,1,n)
+	end
+end
+
+function statement_class:row()
+	local t = {}
+	for i,col in ipairs(self.columns) do
+		local name = asserts(col.column_alias_name,'column %d does not have an alias name',i)
+		local val = col:get()
+		t[name] = val
+	end
+	return t
 end
 
 local function statement_exec_iter(st,i)
@@ -620,20 +759,22 @@ local function transaction_exec_iter(st)
 	end
 end
 
---ATTN: if you break the iteration, either with break or with error(), the statement and cursor remain open
---until closing of the transaction!
+local function null_iter() end
+
 function transaction_class:exec_on(at,sql,...)
 	local st = self:prepare_on(at,sql)
 	st:setparams(...)
 	st:run()
-	return transaction_exec_iter,st
+	if st.expect_output then
+		return transaction_exec_iter,st
+	else
+		st:close()
+		return null_iter
+	end
 end
 
 function transaction_class:exec(sql,...)
-	local st = self:prepare(sql)
-	st:setparams(...)
-	st:run()
-	return transaction_exec_iter,st
+	return self:exec_on(next(self.attachments),sql,...)
 end
 
 local function attachment_exec_iter(st)
@@ -644,14 +785,18 @@ local function attachment_exec_iter(st)
 	end
 end
 
---ATTN: if you break the iteration, either with break or with error(), the transaction, statement and cursor
---all remain open until closing of the attachment!
+--ATTN: if you break the iteration before fetching all the result rows the
+--transaction, statement and fetch cursor all remain open until you close the attachment!
 function attachment_class:exec(sql,...)
 	local tr = self:start_transaction_ex()
 	local st = tr:prepare_on(self,sql)
 	st:setparams(...)
 	st:run()
-	return attachment_exec_iter,st
+	if st.expect_output then
+		return attachment_exec_iter,st
+	else
+		st.transaction:commit()
+	end
 end
 
 function attachment_class:exec_immediate(sql)

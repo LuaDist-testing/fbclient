@@ -1,5 +1,5 @@
 --[[
-	TPB (Transaction Parameter Block) structure: encode the options for creating transactions.
+	TPB (Transaction Parameter Block) structure: encode the options for creating transactions
 
 	encode(tpb_options_t) -> TPB encoded string.
 

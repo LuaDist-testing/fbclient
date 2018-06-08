@@ -53,7 +53,7 @@ local globals = {
 	pcall = pcall,
 	print = print,
 	--*** coroutines
-	--coroutine = coroutine,
+	coroutine = coroutine,
 	--*** interpreter
 	--load = load,
 	--loadstring = loadstring,
@@ -72,10 +72,11 @@ local globals = {
 	--*** debug
 	--debug = debug,
 	--*** unsupported
-	newproxy = newproxy,
+	--newproxy = newproxy,
 	--*** alien
 	alien = alien,
 	struct = struct,
+	util = util, --in case you want to be explicit about it
 }
 
 --add all utils to the globals table

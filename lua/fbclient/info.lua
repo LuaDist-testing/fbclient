@@ -1,5 +1,5 @@
 --[[
-	auxilliary functions to help encode/decode the buffers for requesting info about a firebird object.
+	Auxilliary functions to help encode/decode the buffers for requesting info about a firebird object
 
 	encode(info_name,options_t,info_codes,info_buf_sizes,encoders) -> encoded_options_string,required_info_buf_len
 	decode(info_type,info_buf,info_buf_len,info_code_lookup,decoders,[array_options]) -> info_t
@@ -10,7 +10,7 @@
 
 module(...,require 'fbclient.init')
 
--- end codes that can terminate an info string.
+--end codes that can terminate an info string.
 local status_codes = {
 	isc_info_end       = 1, --normal ending
 	isc_info_truncated = 2, --receiving buffer too small
@@ -19,11 +19,11 @@ local status_codes = {
 
 local status_code_lookup = index(status_codes)
 
--- recieves an array of info code names, and the catalogs of info codes and required buffer sizes,
--- and returns an encoded info request string and the required info buffer length.
--- note: the only info option with arguments (requiring the encoders parameter) is fb_info_page_contents.
+--recieves an array of info code names, and the catalogs of info codes and required buffer sizes,
+--and returns an encoded info request string and the required info buffer length.
+--note: the only info option with arguments (requiring the encoders parameter) is fb_info_page_contents.
 function encode(info_name,opts,info_codes,info_buf_sizes,encoders)
-	local s,len = '',32 -- we start with a safe length
+	local s,len = '',32 --we start with a safe length
 	for k,params in pairs(opts) do
 		local opt_code = asserts(info_codes[k],'invalid %s option %s',info_name,k)
 		local info_buf_size = asserts(info_buf_sizes[k],'invalid %s option %s (missing buffer size)',info_name,k)
@@ -33,13 +33,13 @@ function encode(info_name,opts,info_codes,info_buf_sizes,encoders)
 		else
 			assert(params==true,'an option that takes no arguments must be given the value true')
 		end
-		len = len+1+SHORT_SIZE+info_buf_size -- opt_code,buf_len,buf
+		len = len+1+SHORT_SIZE+info_buf_size --opt_code,buf_len,buf
     end
 	return s,len
 end
 
 function decode_enum(enum_table)
-	local enum_table_index = index(enum_table) -- no synonyms for enum names allowed!
+	local enum_table_index = index(enum_table) --no synonyms for enum names allowed!
 	return function(s)
 		return assert(enum_table_index[struct.unpack('B',s)])
 	end
@@ -77,39 +77,15 @@ end
 function decode_string(s) return s end
 function decode_boolean(s) return struct.unpack('B',s) == 1 end
 
--- the sole owner of this decoder is isc_info_creation_date; it's also the only decoder that requires a fbapi object.
-function decode_timestamp(s,fbapi)
-	local TM_STRUCT = 'iiiiiiiii' -- C's tm struct: sec,min,hour,day,mon,year,wday,yday,isdst
-
-	--BUG: for some reason, in linux, isc_decode_timestamp writes 2 integers outside the TM_STRUCT space !!
-	TM_STRUCT = TM_STRUCT..'xxxxxxxx'
-
-	local TM_STRUCT_SIZE = struct.size(TM_STRUCT)
-	local tm = alien.buffer(TM_STRUCT_SIZE)
-	assert(#s == struct.size('<iI'))
-	local dx,tx = struct.unpack('<iI',s) -- little endian & no alignment
-	s = struct.pack('!iI',dx,tx) -- current byte order & alignment
-	fbapi.isc_decode_timestamp(s,tm)
-	local t = {}
-	t.sec,t.min,t.hour,t.day,t.month,t.year,t.wday,t.yday,t.isdst =
-		struct.unpack(TM_STRUCT,tm,TM_STRUCT_SIZE)
-	t.month = t.month+1
-	t.year = t.year+1900
-	t.wday = t.wday+1
-	t.yday = t.yday+1
-	t.isdst = t.isdst ~= 0
-	return t
-end
-
--- recieves a result buffer (not string!) and returns a table of the form option=body, where
--- body is either decoded with a suitable decoder (if any), or undecoded, as string.
+--recieves a result buffer (not string!) and returns a table of the form option=body, where
+--body is either decoded with a suitable decoder (if any), or undecoded, as string.
 function decode(info_type,info_buf,info_buf_len,info_code_lookup,decoders,array_options,fbapi)
 	local info={}
 	local ofs=1
 	while true do
-		-- info_buf has the form: <info_cluster1>, ..., isc_info_end
-		-- info_cluster ::= info_code:byte, body_length:short, body:string
-		-- if data didn't fit in, info_buf will contain isc_info_truncated, otherwise isc_info_end.
+		--info_buf has the form: <info_cluster1>, ..., isc_info_end
+		--info_cluster ::= info_code:byte, body_length:short, body:string
+		--if data didn't fit in, info_buf will contain isc_info_truncated, otherwise isc_info_end.
 		local info_code = struct.unpack('B',info_buf,info_buf_len,ofs); ofs=ofs+1
 		if status_code_lookup[info_code] then
 			if info_code == status_codes.isc_info_end then
@@ -122,7 +98,7 @@ function decode(info_type,info_buf,info_buf_len,info_code_lookup,decoders,array_
 			local decoder = asserts(decoders[info_name],'%s decoder missing for option %s',info_type,info_name)
 			local body_len = struct.unpack('<H',info_buf,info_buf_len,ofs); ofs=ofs+SHORT_SIZE
 			local body = decoder(info_buf:tostring(body_len,ofs),fbapi); ofs=ofs+body_len
-			if array_options and array_options[info_name] then -- this info_code is to be expected multiple times!
+			if array_options and array_options[info_name] then --this info_code is to be expected multiple times!
 				local t = info[info_name]
 				if t then
 					t[#t+1] = body

@@ -1,8 +1,10 @@
 --[=[
-	lbc binding for decimal numbers.
+	lbc binding for bc decimal number support
 
 	df(lo,hi,scale) -> d; to be used with getdecimal()
 	sdf(d,scale)	-> lo,hi; to be used with setdecimal()
+
+	bc_meta			-> the metatable of all bc numbers
 	isbc(x)			-> true|false; the bc library should provide this but since it doesn't...
 
 	xsqlvar:getbc() -> d
@@ -17,16 +19,15 @@
 
 	LIMITATIONS:
 	- assumes 2's complement signed int64 format (no byte order assumption though).
-	- only tested on linux.
 
 ]=]
 
 module(...,require 'fbclient.init')
 
-local bc = require 'bc' -- yes, the module is called bc, not lbc!
+local bc = require 'bc'
 local xsqlvar_class = require('fbclient.xsqlvar').xsqlvar_class
 local BC_ZERO = bc.number(0)
-local BC_META = getmetatable(BC_ZERO)
+bc_meta = getmetatable(BC_ZERO)
 
 -- convert the lo,hi dword pairs of a 64bit integer into a decimal number and scale it down.
 function df(lo,hi,scale)
@@ -35,7 +36,7 @@ end
 
 -- scale up a decimal number and convert it into the corresponding lo,hi dword pairs of its int64 representation.
 function sdf(d,scale)
-	local hi,lo = bc.divmod(d*10^-scale,2^32) --divmod returns quotient,reminder.
+	local hi,lo = bc.divmod(d*10^-scale,2^32) --divmod returns quotient,remainder.
 	if d < BC_ZERO then
 		hi = hi-1
 		lo = lo + 2^32
@@ -52,10 +53,11 @@ function xsqlvar_class:setbc(d)
 end
 
 function isbc(x)
-	return getmetatable(x) == BC_META
+	return getmetatable(x) == bc_meta
 end
 
-xsqlvar_class.add_set_handler(
+--the setter and getter must be module-bound so they won't get garbage-collected
+xsqlvar_class:add_set_handler(
 	function(self,p,typ,opt)
 		if isbc(p) and (typ == 'int16' or typ == 'int32' or typ == 'int64') then
 			self:setbc(p)
@@ -64,10 +66,11 @@ xsqlvar_class.add_set_handler(
 	end
 )
 
-xsqlvar_class.add_get_handler(
+xsqlvar_class:add_get_handler(
 	function(self,typ,opt)
 		if typ == 'int16' or typ == 'int32' or typ == 'int64' then
 			return true,self:getbc()
 		end
 	end
 )
+

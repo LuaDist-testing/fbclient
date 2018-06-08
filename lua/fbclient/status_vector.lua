@@ -1,20 +1,20 @@
 --[[
-	STATUS_VECTOR structure: encapsulate error reporting for all firebird functions.
+	STATUS_VECTOR structure: encapsulate error reporting for all firebird functions
 
 	new() -> sv
 
 	status(sv) -> true|nil,errcode
 	full_status(fbapi, sv) -> true|nil,full_error_message
-	errors(fbapi, sv) -> {errmsg1,...}
-	sqlcode(fbapi, sv) -> n; deprecated in favor of sqlstate()
+	errors(fbapi, sv) -> {err_msg1,...}
+	sqlcode(fbapi, sv) -> n; deprecated in favor of sqlstate() in firebird 2.5+
 	sqlstate(fbapi, sv) -> s; SQL-2003 compliant SQLSTATE code; fbclient 2.5+ firebird 2.5+
 	sqlerror(fbapi, sqlcode) -> sql_error_message
 
-	pcall(b, sv, fname, ...) -> true,status|false,full_error_message
-	try(b, sv, fname, ...) -> status,errcode; breaks on errors with full_error_message
+	pcall(fbapi, sv, fname, ...) -> true,status|false,full_error_message
+	try(fbapi, sv, fname, ...) -> status; breaks on errors with full_error_message
 
 	USAGE:
-	use new() to get you a new status_vector, then you can use any firebird API function
+	use new() to get you a new status_vector, then you can use any Firebird API function
 	with it (arg#1). then check out status() to see if the function failed, and if so, call errors(), etc.
 	to grab the errors. alternatively, use pcall() with any firebird function, which follows
 	the lua protocol for failing, or use try() to make them break directly.
@@ -26,6 +26,8 @@
 ]]
 
 module(...,require 'fbclient.init')
+
+local binding = require 'fbclient.binding'
 
 --to be used by error_codes()
 local codes = {
@@ -53,15 +55,20 @@ end
 
 -- this function is made so you can do assert(status(sv)) after each firebird call.
 function status(sv)
+	--checktype(sv,'alien buffer',1)
+
 	s0, s1 = struct.unpack('ii', sv, struct.size('ii'))
 	return not (s0 == 1 and s1 ~= 0), s1
 end
 
 -- use this only if status() returns false.
 function errors(fbapi, sv)
+	checktype(fbapi,'alien library',1)
+	--checktype(sv,'alien buffer',2)
+
 	local errlist = {}
 	local msg = alien.buffer(2048)
-	local psv = alien.buffer(alien.sizeof('pointer'))
+	local psv = alien.buffer(POINTER_SIZE)
 	psv:set(1, sv:topointer(), 'pointer')
 	while fbapi.fb_interpret(msg, 2048, psv) ~= 0 do
 		errlist[#errlist+1] = msg:tostring()
@@ -76,6 +83,9 @@ end
 
 -- use this if status() returns false.
 function sqlstate(fbapi, sv)
+	checktype(fbapi,'alien library',1)
+	--checktype(sv,'alien buffer',2)
+
 	local sqlstate_buf = alien.buffer(6)
 	fbapi.fb_sqlstate(sqlstate_buf, sv)
 	return sqlstate_buf:tostring(5)
@@ -83,15 +93,17 @@ end
 
 -- use this if status() returns false.
 function sqlerror(fbapi, sqlcode)
-	assert(xtype(fbapi)=='fbclient.binding', 'arg#1 of type binding expected')
+	checktype(fbapi,'alien library',1)
+
 	local msg = alien.buffer(2048)
 	fbapi.isc_sql_interprete(sqlcode, msg, 2048)
 	return msg:tostring()
 end
 
 function full_status(fbapi, sv)
-	assert(xtype(fbapi)=='fbclient.binding', 'arg#1 of type binding expected')
-	assert(isbuffer(sv), 'arg#2 of type buffer expected')
+	checktype(fbapi,'alien library',1)
+	--checktype(sv,'alien buffer',2)
+
 	local ok,err = status(sv)
 	if not ok then
 		local errcodes = package.loaded['fbclient.error_codes']
@@ -112,13 +124,14 @@ function full_status(fbapi, sv)
 end
 
 -- calls fname (which is the name of a firebird API function) in "protected mode",
--- following the return protocol of lua's pcal
+-- following the return protocol of lua's pcall
 function pcall(fbapi, sv, fname,...)
-	assert(xtype(fbapi)=='fbclient.binding', 'arg#1 of type binding expected')
-	assert(isbuffer(sv), 'arg#2 of type buffer expected')
-	assert(type(fname)=='__tostring', 'arg#3 of type string expected')
+	checktype(fbapi,'alien library',1)
+	--checktype(sv,'alien buffer',2)
+	checktype(fname,'string',3)
+
 	local status = fbapi[fname](sv,...)
-	ok,err = full_status(sv)
+	ok,err = full_status(fbapi, sv)
 	if ok then
 		return true,status
 	else
@@ -127,11 +140,11 @@ function pcall(fbapi, sv, fname,...)
 end
 
 function try(fbapi, sv, fname,...)
-	local status = fbapi[fname](sv,...)
-	ok,err = full_status(fbapi, sv)
+	local ok,result = pcall(fbapi, sv, fname,...)
 	if ok then
-		return status,err
+		return result
 	else
-		error(fname..'() '..err, 3) -- we use level 3 because the function calling try() should be library code
+		error(result, 3)
 	end
 end
+

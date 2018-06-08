@@ -1,15 +1,15 @@
 -- This file was automatically generated for the LuaDist project.
 
 package = 'fbclient'
-version = '0.4.0-1'
+version = '0.5.0-1'
 -- LuaDist source
 source = {
-  tag = "0.4.0-1",
+  tag = "0.5.0-1",
   url = "git://github.com/LuaDist-testing/fbclient.git"
 }
 -- Original source
 -- source = {
---    url = 'http://fbclient.googlecode.com/hg/fbclient-0.4.0.zip',
+--    url = 'http://fbclient.googlecode.com/hg/fbclient-0.5.0.zip'
 -- }
 
 description = {
@@ -19,7 +19,7 @@ A collection of pure Lua modules that allows you to connect and execute
 queries against the Firebird Relational Database.
 It is a modular, 3-layer interface, aiming at full API coverage.
 ]],
-   homepage = 'http://code.google.com/p/fbclient/',
+   homepage = 'http://fbclient.googlecode.com/',
    license = 'MIT/X11',
 }
 
@@ -31,5 +31,5 @@ dependencies = {
 
 build = {
    type = 'builtin',
-   modules = {}, --LuaRocks automatically copies all Lua modules inside the ./lua directory
+   modules = {}, --LuaRocks automatically copies all Lua modules found in the ./lua directory
 }

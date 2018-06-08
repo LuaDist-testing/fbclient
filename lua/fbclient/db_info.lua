@@ -1,6 +1,6 @@
 --[[
-	DB_INFO: request info about an attachment.
-	this is the aux. library to encode the request buffer and decode the reply buffer.
+	DB_INFO: request information about an attachment
+	this is the aux library to encode the request buffer and decode the reply buffer.
 
 	encode(options_t) -> encoded options string
 	decode(info_buf, info_buf_len) -> decoded info table
@@ -14,6 +14,10 @@
 module(...,require 'fbclient.init')
 
 local info = require 'fbclient.info'
+
+--used by decode_timestamp()
+local datetime = require 'fbclient.datetime'
+local alien = require 'alien'
 
 local info_codes = {
 	isc_info_db_id              = 4, --{db_filename,site_name}
@@ -38,7 +42,7 @@ local info_codes = {
 	isc_info_allocation         = 21, --number of database pages allocated
 	isc_info_attachment_id      = 22, --attachment id number; att. IDs are in system table MON$ATTACHMENTS.
 
-	--all *_count codes below return {[table_id]=operation_count,...}; table IDs are in system table RDB$RELATION.
+	--all *_count codes below return {[table_id]=operation_count,...}; table IDs are in the system table RDB$RELATIONS.
 	isc_info_read_seq_count     = 23, --number of sequential table scans (row reads) done on each table since the database was last attached
 	isc_info_read_idx_count     = 24, --number of reads done via an index since the database was last attached
 	isc_info_insert_count       = 25, --number of inserts into the database since the database was last attached
@@ -287,7 +291,7 @@ local info_db_providers = {
 	isc_info_db_code_firebird = 4,
 }
 
--- returns {table_id,number_of_operations}
+--returns {table_id,number_of_operations}
 local function decode_count(s)
 	local t = {}
 	for i=1,#s/6 do
@@ -300,6 +304,17 @@ end
 local function decode_version_string(s)
 	local mark,ver = struct.unpack('bBc0',s)
 	return ver
+end
+
+--the sole user of this decoder is isc_info_creation_date;
+--it's also the only decoder that requires a fbapi object.
+local function decode_timestamp(s,fbapi)
+	assert(#s == struct.size('<iI'))
+	local dx,tx = struct.unpack('<iI',s) --little endian & no alignment
+	local dt_buf = alien.buffer(2*INT_SIZE)
+	dt_buf:set(1,dx)
+	dt_buf:set(1+INT_SIZE,tx)
+	return datetime.decode_timestamp(dt_buf,fbapi)
 end
 
 local decoders = {
@@ -385,12 +400,12 @@ local decoders = {
 	isc_info_db_provider = info.decode_enum(info_db_providers),
 	isc_info_active_transactions = info.decode_unsigned,
 	isc_info_active_tran_count = info.decode_unsigned,
-	isc_info_creation_date = info.decode_timestamp,
+	isc_info_creation_date = decode_timestamp,
 	isc_info_db_file_size = info.decode_unsigned,
 	fb_info_page_contents = info.decode_string,
 }
 
--- info on these options can occur multiple times, so they are to be encapsulated as arrays.
+--info on these options can occur multiple times, so they are to be encapsulated as arrays.
 local array_options = {
 	isc_info_user_names = true,
 	isc_info_active_transactions = true,

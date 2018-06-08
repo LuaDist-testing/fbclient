@@ -1,5 +1,5 @@
 --[=[
-	Events API.
+	Events API
 
 	**** THIS FILE IS WORK-IN-PROGRESS - DO NOT USE IT ****
 

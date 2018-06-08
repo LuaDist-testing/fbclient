@@ -1,5 +1,5 @@
 --[=[
-	isc error codes for firebird: use it as constant table for isc_errors, or when you don't
+	isc error codes: use it as constant table for isc_errors, or when you don't
 	have the firebird.msg installed on the client. gives you a clue about the error in absence of a
 	full error message.
 	adds some overhead, so it's not loaded automatically, but it's used automatically if loaded.
@@ -9,6 +9,8 @@
 
 	Based on the latest include/gen/iberror.h located at:
 		http://firebird.cvs.sourceforge.net/viewvc/*checkout*/firebird/firebird2/src/include/gen/iberror.h
+
+	Last updated: Sep. 27, 2010
 
 ]=]
 
@@ -570,7 +572,7 @@ local codes = {
 	isc_array_max_dimensions            = 335544873,
 	isc_max_db_per_trans_allowed        = 335544874,
 	isc_bad_debug_format                = 335544875,
-	isc_bad_proc_B,R                    = 335544876,
+	isc_bad_proc_BLR                    = 335544876,
 	isc_key_too_big                     = 335544877,
 	isc_concurrent_transaction          = 335544878,
 	isc_not_valid_for_var               = 335544879,
@@ -688,7 +690,7 @@ local codes = {
 	isc_view_name                       = 335544991,
 	isc_lock_dir_access                 = 335544992,
 	isc_invalid_fetch_option            = 335544993,
-	isc_bad_fun_B,R                     = 335544994,
+	isc_bad_fun_BLR                     = 335544994,
 	isc_func_pack_not_implemented       = 335544995,
 	isc_proc_pack_not_implemented       = 335544996,
 	isc_gfix_db_name                    = 335740929,

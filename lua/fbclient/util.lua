@@ -1,23 +1,27 @@
 --[[
-	utility functions.
-	they get registered in the inherited environment of all modules (see package.lua).
+	Utility functions
+	keep this list as short as possible as to not make the language too alien.
+	these functions are registerd in the environment inherited by all other modules (see init.lua).
 
-	version() -> major,minor,build
-	index(t) -> new_t
-	keys(t) -> a
+	Table utils:
+
+	index(t) -> {t.v1=t.k1,...}
+	keys(t) -> {t.k1,t.k2,...}
 	deep_copy(t,[target={}]) -> target
-	count(t,[upto=math.huge]) -> n
+	count(t,[upto=math.huge]) -> n; counts table keys upto a limit
+
+	Platform constants:
+
+	INT_SIZE, SHORT_SIZE, LONG_SIZE, POINTER_SIZE
+	MIN_INT, MAX_INT, MAX_UINT, MIN_SHORT, MAX_SHORT, MAX_USHORT, MAX_BYTE, MIN_SCHAR, MAX_SCHAR,
+	MIN_LUAINT, MAX_LUAINT
+
+	Type checking:
+
 	asserts(v,s,...)
-	xtype(x) -> uses x's metatable __type field to get the type of x, or falls back to type()
-	applicable(x,metamethod_name) -> tells if a certain operation is applicable to an object
-	xunpack(t,i,j) -> unpack() defined in terms of __index and __len for non-tables
-	isbuffer(b) -> true|false; true if b is a buffer created with alien.buffer()
-	dump(v)
+	xtype(x) -> getmetatable(x).__type or type(x)
+	applicable(x,metamethod_name) -> tells if a metamethod is applicable to an object
 
-	INT_SIZE, SHORT_SIZE, DOUBLE_SIZE, POINTER_SIZE, MIN_INT, MAX_INT, MAX_UINT
-	MIN_SHORT, MAX_SHORT, MAX_USHORT, MAX_BYTE, MIN_SCHAR, MAX_SCHAR, MIN_LUAINT, MAX_LUAINT
-
-	isinteger(v) -> true|false
 	isint(v) -> true|false
 	isuint(v) -> true|false
 	isshort(v) -> true|false
@@ -25,8 +29,13 @@
 	isbyte(v) -> true|false
 	isschar(v) -> true|false
 
+	Debug utils:
+
+	dump(v)
+
 ]]
 
+local error = error
 local pairs = pairs
 local getmetatable = getmetatable
 local setmetatable = setmetatable
@@ -42,13 +51,7 @@ local alien = require 'alien'
 
 module(...) --use of require'fbclient.init' on this module would create a circular dependency
 
-function version()
-	return 0,4,0
-end
-
-local ALIEN_BUFFER_META = getmetatable(alien.buffer(1))
-
---turn values into keys
+--enumerate a table's keys into an array in no particular order
 function index(t)
 	newt={}
 	for k,v in pairs(t) do
@@ -57,7 +60,7 @@ function index(t)
 	return newt
 end
 
---return an array of keys of t
+--return an unsorted array of keys of t
 function keys(t)
 	newt={}
 	for k,v in pairs(t) do
@@ -68,7 +71,7 @@ end
 
 --simple deep copy function without cycle detection.
 --uses assignment to copy objects (except tables), so userdata and thread types are not supported.
---the metatable is not copied, just referenced, except if it's the source object itself, when it's reassigned.
+--the metatable is not copied, just referenced, except if it's the source object itself, then it's reassigned.
 function deep_copy(t,target)
 	if not t then return target end
 	target = target or {}
@@ -92,8 +95,27 @@ end
 
 --garbageless assert with string formatting
 function asserts(v,s,...)
-	if v then return v,s,... end
-	assert(false, s:format(select(1,...)))
+	if v then
+		return v,s,...
+	else
+		error(s:format(select(1,...)), 2)
+	end
+end
+
+function checktype(val,typ,argname)
+	if type(typ)=='string' then
+		if type(argname)=='number' then
+			asserts(xtype(val)==typ,'arg #%d type %s expected, got %s',argname,typ,xtype(val))
+		else
+			asserts(xtype(val)==typ,'arg %s type %s expected, got %s',argname,typ,xtype(val))
+		end
+	else
+		if type(argname)=='number' then
+			asserts(typ(val),'arg #%d expected, got %s',argname,typ,xtype(val))
+		else
+			asserts(typ(val),'arg %s expected, got %s',argname,typ,xtype(val))
+		end
+	end
 end
 
 function xtype(x)
@@ -114,65 +136,69 @@ local applicable_prims = {
 function applicable(x,mm)
 	if applicable_prims[mm] == type(x) then
 		return true
+	elseif mm == '__tostring' and type(x) == 'number' then
+		return true
 	else
 		local mt = getmetatable(x)
 		return mt and mt[mm] or false
 	end
 end
 
-function xunpack(t,i,j)
-	if type(t) == 'table' then
-		return unpack(t,i,j)
-	else
-		i = i or 1
-		j = j or #t
-		if i <= j then
-			return t[i], xunpack(t,i+1,j) --not a tail call :(
-		end
-	end
-end
-
-function isbuffer(b)
-	return getmetatable(b) == ALIEN_BUFFER_META
-end
-
-local function dump_recursive(v,k,i)
-	i = i or 0
-	if applicable(v,'__pairs') then
-		print((' '):rep(i)..(k and '['..tostring(k)..'] => ' or '')..type(v))
-		for kk,vv in pairs(v) do
-			dump_recursive(vv,kk,i+2)
-		end
-	else
-		print((' '):rep(i)..(k and '['..k..'] => ' or '')..tostring(v)..', type '..type(v))
-	end
-end
-
--- table dump for debugging purposes
-function dump(v) dump_recursive(v) end
-
--- basic stuff for working with binary integers
 INT_SIZE	= alien.sizeof('int')
 SHORT_SIZE	= alien.sizeof('short')
-DOUBLE_SIZE = alien.sizeof('double')
+LONG_SIZE	= alien.sizeof('long')
 POINTER_SIZE= alien.sizeof('pointer')
-MIN_INT		= -2^31
-MAX_INT		= 2^31-1
-MAX_UINT	= 2^32-1
-MIN_SHORT	= -2^15
-MAX_SHORT	= 2^15-1
-MAX_USHORT	= 2^16-1
-MAX_BYTE	= 2^8-1
+MIN_INT		= -2^(8*INT_SIZE-1)
+MAX_INT		=  2^(8*INT_SIZE-1)-1
+MAX_UINT	=  2^(8*INT_SIZE)-1
+MIN_SHORT	= -2^(8*SHORT_SIZE-1)
+MAX_SHORT	=  2^(8*SHORT_SIZE-1)-1
+MAX_USHORT	=  2^(8*SHORT_SIZE)-1
+MAX_BYTE	=  2^8-1
 MIN_SCHAR	= -2^7
-MAX_SCHAR	= 2^7-1
+MAX_SCHAR	=  2^7-1
 MIN_LUAINT	= -2^52
-MAX_LUAINT	= 2^52-1
+MAX_LUAINT	=  2^52-1
 
-function isinteger(v) return v%1 == 0 end
 function isint(v) return v%1 == 0 and v >= MIN_INT and v <= MAX_INT end
 function isuint(v) return v%1 == 0 and v >= 0 and v <= MAX_UINT end
 function isshort(v) return v%1 == 0 and v >= MIN_SHORT and v <= MAX_SHORT end
 function isushort(v) return v%1 == 0 and v >= 0 and v <= MAX_USHORT end
 function isbyte(v) return v%1 == 0 and v >= 0 and v <= MAX_BYTE end
 function isschar(v) return v%1 == 0 and v >= MIN_SCHAR and v <= MAX_SCHAR end
+
+function dump_buffer(buf,size)
+	local s = buf:tostring(size)
+	print('alien buffer',size,s)
+	for i=1,#s do
+		local c = s:sub(i,i)
+		local b = c:byte()
+		print(b,c)
+	end
+end
+
+--debugging functions
+local function dump_recursive(v,k,i,trace)
+	i = i or 0
+	if applicable(v,'__pairs') and not applicable(v,'__tostring') then
+		if trace[v] then
+			print((' '):rep(i)..(k and '['..tostring(k)..'] => ' or '')..'<traced>')
+		else
+			trace[v] = true
+			print((' '):rep(i)..(k and '['..tostring(k)..'] => ' or '')..type(v))
+			for kk,vv in pairs(v) do
+				kk = applicable(kk,'__tostring') and kk or '('..type(kk)..')'
+				dump_recursive(vv,kk,i+2,trace)
+			end
+		end
+	else
+		print((' '):rep(i)..(k and '['..k..'] => ' or '')..tostring(v))
+	end
+end
+
+--table dump for debugging purposes
+function dump(v)
+	local trace = setmetatable({},{ __mode = 'k' })
+	dump_recursive(v,nil,nil,trace)
+end
 

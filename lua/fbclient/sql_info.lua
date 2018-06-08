@@ -1,5 +1,5 @@
 --[[
-	SQL_INFO: request info about a prepared statement.
+	SQL_INFO: request information about a prepared statement
 	this is the aux. library to encode the request buffer and decode the reply buffer.
 
 	encode(options_t) -> encoded options string
@@ -17,19 +17,19 @@ module(...,require 'fbclient.init')
 local info = require 'fbclient.info'
 
 local info_request_codes = {
-	isc_info_sql_select         =  4, --undocumented
+	isc_info_sql_select			=  4, --undocumented
 	isc_info_sql_bind			=  5, --undocumented
 	isc_info_sql_num_variables	=  6, --undocumented
 	isc_info_sql_describe_vars	=  7, --undocumented
 	isc_info_sql_sqlda_start	= 20, --undocumented
 	isc_info_sql_stmt_type		= 21, --statement type(s)
-	isc_info_sql_get_plan       = 22, --execution plan
+	isc_info_sql_get_plan		= 22, --execution plan
 	isc_info_sql_records		= 23, --affected row counts for each operation
 	isc_info_sql_batch_fetch	= 24, --undocumented
 }
 
 local info_reply_codes = {
-	isc_info_sql_select         =  4, --undocumented
+	isc_info_sql_select			=  4, --undocumented
 	isc_info_sql_bind			=  5, --undocumented
 	isc_info_sql_num_variables	=  6, --undocumented
 	isc_info_sql_describe_vars	=  7, --undocumented
@@ -47,7 +47,7 @@ local info_reply_codes = {
 	isc_info_sql_alias			= 19, --undocumented
 	isc_info_sql_sqlda_start	= 20, --undocumented
 	isc_info_sql_stmt_type		= 21, --array: one or two strings from stmt_codes table below
-	isc_info_sql_get_plan       = 22, --string: execution plan
+	isc_info_sql_get_plan		= 22, --string: execution plan
 	isc_info_sql_records		= 23, --table: affected row counts for each operation
 	isc_info_sql_batch_fetch	= 24, --undocumented
 	isc_info_sql_relation_alias	= 25, --fb 2.0+
@@ -56,33 +56,33 @@ local info_reply_codes = {
 local info_reply_code_lookup = index(info_reply_codes)
 
 local info_buf_sizes = {
-	isc_info_sql_select         = 1,
+	isc_info_sql_select			= 1,
 	isc_info_sql_bind			= 1,
 	isc_info_sql_num_variables	= INT_SIZE,
 	isc_info_sql_describe_vars	= 1,
 	isc_info_sql_sqlda_start	= 1,
 	isc_info_sql_stmt_type		= 1+1, -- max. 2 entries will be filled says the manual
-	isc_info_sql_get_plan       = MAX_SHORT,
+	isc_info_sql_get_plan		= MAX_SHORT,
 	isc_info_sql_records		= 4*(1+SHORT_SIZE+INT_SIZE), -- all 4 isc_info_req_* are expected
 	isc_info_sql_batch_fetch	= 1,
 	isc_info_sql_relation_alias	= 32+1,
 }
 
 local stmt_codes = {
-	isc_info_sql_stmt_select            = 1,
-	isc_info_sql_stmt_insert            = 2,
-	isc_info_sql_stmt_update            = 3,
-	isc_info_sql_stmt_delete            = 4,
-	isc_info_sql_stmt_ddl               = 5,
-	isc_info_sql_stmt_get_segment       = 6,
-	isc_info_sql_stmt_put_segment       = 7,
-	isc_info_sql_stmt_exec_procedure  	= 8,
-	isc_info_sql_stmt_start_trans     	= 9,
-	isc_info_sql_stmt_commit          	= 10,
-	isc_info_sql_stmt_rollback        	= 11,
-	isc_info_sql_stmt_select_for_upd  	= 12,
-	isc_info_sql_stmt_set_generator   	= 13,
-	isc_info_sql_stmt_savepoint       	= 14,
+	isc_info_sql_stmt_select			= 1,
+	isc_info_sql_stmt_insert			= 2,
+	isc_info_sql_stmt_update			= 3,
+	isc_info_sql_stmt_delete			= 4,
+	isc_info_sql_stmt_ddl				= 5,
+	isc_info_sql_stmt_get_segment		= 6,
+	isc_info_sql_stmt_put_segment		= 7,
+	isc_info_sql_stmt_exec_procedure	= 8,
+	isc_info_sql_stmt_start_trans		= 9,
+	isc_info_sql_stmt_commit			= 10,
+	isc_info_sql_stmt_rollback			= 11,
+	isc_info_sql_stmt_select_for_upd	= 12,
+	isc_info_sql_stmt_set_generator		= 13,
+	isc_info_sql_stmt_savepoint			= 14,
 }
 
 local stmt_code_lookup = index(stmt_codes)
@@ -97,23 +97,23 @@ local records_cluster_codes = {
 records_cluster_code_lookup = index(records_cluster_codes)
 
 local decoders = {
-	isc_info_sql_select         = info.decode_boolean,
-	isc_info_sql_bind           = info.decode_boolean,
-	isc_info_sql_num_variables  = info.decode_unsigned,
-	isc_info_sql_describe_vars  = info.decode_boolean,
-	isc_info_sql_describe_end   = info.decode_boolean,
-	isc_info_sql_sqlda_seq      = info.decode_unsigned,
-	isc_info_sql_message_seq    = info.decode_unsigned,
-	isc_info_sql_type           = info.decode_unsigned,
-	isc_info_sql_sub_type       = info.decode_unsigned,
-	isc_info_sql_scale          = info.decode_unsigned,
-	isc_info_sql_length         = info.decode_unsigned,
-	isc_info_sql_null_ind       = info.decode_unsigned,
-	isc_info_sql_field          = info.decode_string,
-	isc_info_sql_relation       = info.decode_string,
-	isc_info_sql_owner          = info.decode_string,
-	isc_info_sql_alias          = info.decode_string,
-	isc_info_sql_sqlda_start    = info.decode_boolean,
+	isc_info_sql_select			= info.decode_boolean,
+	isc_info_sql_bind			= info.decode_boolean,
+	isc_info_sql_num_variables	= info.decode_unsigned,
+	isc_info_sql_describe_vars	= info.decode_boolean,
+	isc_info_sql_describe_end	= info.decode_boolean,
+	isc_info_sql_sqlda_seq		= info.decode_unsigned,
+	isc_info_sql_message_seq	= info.decode_unsigned,
+	isc_info_sql_type			= info.decode_unsigned,
+	isc_info_sql_sub_type		= info.decode_unsigned,
+	isc_info_sql_scale			= info.decode_unsigned,
+	isc_info_sql_length			= info.decode_unsigned,
+	isc_info_sql_null_ind		= info.decode_unsigned,
+	isc_info_sql_field			= info.decode_string,
+	isc_info_sql_relation		= info.decode_string,
+	isc_info_sql_owner			= info.decode_string,
+	isc_info_sql_alias			= info.decode_string,
+	isc_info_sql_sqlda_start	= info.decode_boolean,
 	isc_info_sql_stmt_type = function(s) -- custom decorer made because you can get one or two stmt. types
 		local ret = {}
 		for i=1,#s do

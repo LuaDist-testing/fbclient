@@ -1,5 +1,5 @@
 --[=[
-	Service Manager API, OOP interface based on service.lua.
+	Service Manager API, objectual interface based on service.lua
 
 	connect([hostname],[username],[password],[timeout_sec],[libname|fbapi],[svc_class]) -> svo
 	connect_ex([hostname],[spb_options_t],[libname|fbapi],[svc_class) -> svo
@@ -24,20 +24,20 @@
 	svo:server_install_path() -> s
 	svo:server_lock_path() -> s
 	svo:server_msg_path() -> s
-	svo:server_log() -> nothing, use lines() or chunks()
+	svo:server_log() -> svo; use lines() or chunks() to get the output
 
 	svo:attachment_num() -> n
 	svo:db_num() -> n
 	svo:db_names() -> name_t
 
-	svo:db_stats(dbname,[options_t]) -> nothing, use lines() or chunks()
-	svo:db_backup(dbname,backup_file|backup_file_t,[options_t])
-	svo:db_restore(backup_file|backup_file_list,db_file,[options_t])
+	svo:db_stats(dbname,[options_t]) -> svo; use lines() or chunks() to get the output
+	svo:db_backup(dbname,backup_file|backup_file_t,[options_t]) -> svo
+	svo:db_restore(backup_file|backup_file_list,db_file,[options_t]) -> svo
 	svo:db_repair(dbname,[options_t])
 	svo:db_sweep(dbname)
 	svo:db_mend(dbname)
-	svo:db_nbackup(dbname,backup_file,[nbackup_level=0],[options_t]) -- firebird 2.5+
-	svo:db_nrestore(backup_file|backup_file_list,db_file,[options_t]) -- firebird 2.5+
+	svo:db_nbackup(dbname,backup_file,[nbackup_level=0],[options_t]) --firebird 2.5+
+	svo:db_nrestore(backup_file|backup_file_list,db_file,[options_t]) --firebird 2.5+
 
 	svo:db_set_page_buffers(dbname,page_buffer_num)
 	svo:db_set_sweep_interval(dbname,sweep_interval)
@@ -59,7 +59,7 @@
 	svo:user_delete(username,[user_db_file])
 
 	--trace API: firebird 2.5+
-	svo:trace_start(trace_config_string,[trace_name]) -> nothing, use lines() or chunks()
+	svo:trace_start(trace_config_string,[trace_name]) -> svo; use lines() or chunks() to get the output
 	svo:trace_list() -> trace_list_t
 	svo:trace_suspend(trace_id)
 	svo:trace_resume(trace_id)
@@ -82,7 +82,7 @@ module(...,require 'fbclient.init')
 local binding = require 'fbclient.binding'
 local svapi = require 'fbclient.status_vector'
 local api = require 'fbclient.service_wrapper'
-local oo = require 'loop.simple'
+local oo = require 'loop.base'
 
 service_class = oo.class()
 
@@ -96,7 +96,7 @@ end
 
 function connect_ex(hostname, spb_opts, timeout, fbapi, svc_class)
 	svc_class = svc_class or service_class
-	fbapi = xtype(fbapi) == 'fbclient.binding' and fbapi or binding.new(fbapi or 'fbclient')
+	fbapi = xtype(fbapi) == 'alien library' and fbapi or binding.new(fbapi or 'fbclient')
 	local service_name = (hostname and hostname..':' or '')..'service_mgr'
 	local sv = svapi.new()
 	local svo = svc_class {
@@ -142,7 +142,7 @@ function service_class:chunks()
 	return chunk_iterator,{self=self},0
 end
 
--- about the service manager
+--about the service manager
 
 function service_class:service_manager_version()
 	local info = api.query(self.fbapi,self.sv,self.handler,{isc_info_svc_version=true},{isc_info_svc_timeout=self.timeout})
@@ -154,7 +154,7 @@ function service_class:busy()
 	return info.isc_info_svc_running
 end
 
--- about the server
+--about the server
 
 function service_class:server_version()
 	local info = api.query(self.fbapi,self.sv,self.handler,{isc_info_svc_server_version=true},{isc_info_svc_timeout=self.timeout})
@@ -188,9 +188,10 @@ end
 
 function service_class:server_log()
 	api.start(self.fbapi,self.sv,self.handler,'isc_action_svc_get_fb_log')
+	return self
 end
 
--- about databases
+--about databases
 
 function service_class:attachment_num()
 	local info = api.query(self.fbapi,self.sv,self.handler,{isc_info_svc_svr_db_info=true},{isc_info_svc_timeout=self.timeout})
@@ -204,7 +205,7 @@ end
 
 function service_class:db_names()
 	local info = api.query(self.fbapi,self.sv,self.handler,{isc_info_svc_svr_db_info=true},{isc_info_svc_timeout=self.timeout})
-	return info.isc_info_svc_svr_db_info.isc_spb_dbname -- this is an array
+	return info.isc_info_svc_svr_db_info.isc_spb_dbname --this is an array
 end
 
 function service_class:db_stats(db_name,opts)
@@ -212,16 +213,17 @@ function service_class:db_stats(db_name,opts)
 	api.start(self.fbapi,self.sv,self.handler,'isc_action_svc_db_stats', {
 		isc_spb_dbname = db_name,
 		isc_spb_options = {
-			isc_spb_sts_hdr_pages		= opts.header_page_only, -- this option is exclusive, unlike others
+			isc_spb_sts_hdr_pages		= opts.header_page_only, --this option is exclusive, unlike others
 			isc_spb_sts_data_pages		= opts.data_pages,
 			isc_spb_sts_idx_pages		= opts.index_pages,
 			isc_spb_sts_record_versions	= opts.record_versions,
 			isc_spb_sts_sys_relations	= opts.include_system_tables,
 		},
 	})
+	return self
 end
 
--- operations on a database
+--operations on a database
 
 function service_class:db_backup(db_name,backup_file,opts)
 	opts = opts or {}
@@ -234,11 +236,12 @@ function service_class:db_backup(db_name,backup_file,opts)
 			isc_spb_bkp_ignore_limbo         = opts.ignore_limbo,
 			isc_spb_bkp_metadata_only        = opts.metadata_only,
 			isc_spb_bkp_no_garbage_collect   = opts.no_garbage_collect,
-			isc_spb_bkp_old_descriptions     = opts.old_descriptions,		-- don't use this option
-			isc_spb_bkp_non_transportable    = opts.non_transportable,		-- don't use this option
+			isc_spb_bkp_old_descriptions     = opts.old_descriptions,		--don't use this option
+			isc_spb_bkp_non_transportable    = opts.non_transportable,		--don't use this option
 			isc_spb_bkp_convert              = opts.include_external_tables,
 		},
 	})
+	return self
 end
 
 function service_class:db_restore(backup_file,db_file,opts)
@@ -262,9 +265,10 @@ function service_class:db_restore(backup_file,db_file,opts)
 			isc_spb_res_use_all_space	= opts.no_space_reservation,
 		},
 	})
+	return self
 end
 
-function service_class:db_nbackup(db_name,backup_file,nbackup_level,opts) -- firebird 2.5+
+function service_class:db_nbackup(db_name,backup_file,nbackup_level,opts) --firebird 2.5+
 	nbackup_level = nbackup_level or 0
 	opts = opts or {}
 	api.start(self.fbapi,self.sv,self.handler,'isc_action_svc_nbak',{
@@ -277,7 +281,7 @@ function service_class:db_nbackup(db_name,backup_file,nbackup_level,opts) -- fir
 	})
 end
 
-function service_class:db_nrestore(backup_file_list,db_file,opts) -- firebird 2.5+
+function service_class:db_nrestore(backup_file_list,db_file,opts) --firebird 2.5+
 	if type(backup_file_list) == 'string' then
 		backup_file_list = {backup_file_list}
 	end
@@ -367,13 +371,13 @@ local shutdown_modes = {
 	full   = 'isc_spb_prp_sm_full',
 }
 
--- force_mode = full|transactions|connections; shutdown_mode = normal|multi|single|full
+--force_mode = full|transactions|connections; shutdown_mode = normal|multi|single|full
 function service_class:db_shutdown(db_name,timeout,force_mode,shutdown_mode)
 	api.start(self.fbapi,self.sv,self.handler,'isc_action_svc_properties', {
 		isc_spb_dbname = db_name,
-		isc_spb_prp_shutdown_db				= (force_mode or 'full') == 'full' and timeout or nil, -- force
-		isc_spb_prp_deny_new_attachments	= force_mode == 'transactions' and timeout or nil, -- let transactions finish
-		isc_spb_prp_deny_new_transactions	= force_mode == 'connections' and timeout or nil, -- let attachments finish
+		isc_spb_prp_shutdown_db				= (force_mode or 'full') == 'full' and timeout or nil, --force
+		isc_spb_prp_deny_new_attachments	= force_mode == 'transactions' and timeout or nil, --let transactions finish
+		isc_spb_prp_deny_new_transactions	= force_mode == 'connections' and timeout or nil, --let attachments finish
 		isc_spb_prp_shutdown_mode			= asserts(shutdown_modes[shutdown_mode or 'multi'], 'invalid shutdown mode %s', shutdown_mode),
 	})
 end
@@ -395,7 +399,7 @@ function service_class:db_use_shadow(db_name)
 	})
 end
 
--- operations on the security database
+--operations on the security database
 
 function service_class:user_db_file()
 	local info = api.query(self.fbapi,self.sv,self.handler,{isc_info_svc_user_dbpath=true},{isc_info_svc_timeout=self.timeout})
@@ -458,7 +462,7 @@ function service_class:user_delete(username,user_db_file)
 	})
 end
 
--- tracing API (firebird 2.5+)
+--tracing API (firebird 2.5+)
 
 local function check_trace_action_result(s)
 	assert(not s:find('not found') and not s:find('No permission'),s)
@@ -499,6 +503,7 @@ function service_class:trace_start(trace_config_string,trace_name)
 		isc_spb_trc_name = trace_name,
 		isc_spb_trc_cfg  = trace_config_string,
 	})
+	return self
 end
 
 function service_class:trace_suspend(trace_id)
@@ -522,7 +527,7 @@ function service_class:trace_stop(trace_id)
 	end
 end
 
--- RDB$ADMIN mapping (firebird 2.5+)
+--RDB$ADMIN mapping (firebird 2.5+)
 
 function service_class:rdbadmin_set_mapping()
 	api.start(self.fbapi,self.sv,self.handler,'isc_action_svc_set_mapping')

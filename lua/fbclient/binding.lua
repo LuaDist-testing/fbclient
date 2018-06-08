@@ -1,46 +1,47 @@
 --[[
-	alien binding of the fbclient shared library.
+	Alien binding of the fbclient shared library
 
 	Based on the latest jrd/ibase.h located at:
 		http://firebird.cvs.sourceforge.net/viewvc/*checkout*/firebird/firebird2/src/jrd/ibase.h
 
 	new(libname) -> fbapi
+	is_library(fbapi) -> true|false
+	has_symbol(fbapi,symbol) -> true if symbol is present in fbapi
 	isc_que_events_callback(f); f = function(result_buf, bufsize, updated_buf)
 
 	fbapi.<isc_function_name>(<args>) -> result
-	getmetatable(fbapi).__type -> 'fbclient.binding'
 
-	NOTES:
+	Notes:
+
 	- most API calls are commented --s,s*,... meaning they return int STATUS_VECTOR, and their
 	first argument is an int STATUS_VECTOR[20].
 	- dbh*,trh*,sth*,bh* (db, transaction, statement, blob, etc. handle) is a pointer to a buffer
 	of sizeof(pointer) that you have to allocate yourself and initialize to NULL.
 
-	MISSING FUNCTIONS: (don't worry, they aren't needed)
-		isc_print_*() -- we don't print stuff with database APIs in this country
-		isc_interprete() --deprecated in fb 2.0 as dangerous and replaced by fb_interpret().
-		isc_start_transaction() -- same as isc_start_multiple(), but with varargs instead of a TEB array
-		isc_dsql_finish:types{abi=FBABI,ret=i,p} --status,dbh*; said to have no purpose and do nothing
-		isc_dsql_insert:types{abi=FBABI,ret=i,p,p,H,p} --s,s*,sth*,H,xsqlda*; --not documented
-		isc_prepare_transaction() and isc_prepare_transaction2()
-			-- why in Satan's Glorious Name would we ever want to break ACID of a two-phase commit?
-		isc_dsql_allocate_statement:types{abi=FBABI,ret=i,p,p,p} --s,s*,dbh*,sth*
-			-- we instead use isc_dsql_allocate_statement2() which frees all statements automatically
-			upon database detatchment (no biggie).
-		isc_dsql_exec_immed2:types{abi=FBABI,ret=i,p,p,p,H,s,H,p,p} --s,s*,dbh*,trh*,#query,query,dialect,in_xsqlda*,out_xsqlda*
-			-- *can be* used for statements returning a single row of data directly in an XSQLDA.
-			-- you can't use this if you don't know the types and max. sizes of returned values in advance,
-			rendering this function pretty useless.
-		isc_dsql_execute2:types{abi=FBABI,ret=i,p,p,p,H,p,p} --s,s*,trh*,sth*,1,in_xsqlda*,out_xsqlda*
-			-- *can be* used for statements returning a single row of data directly in an XSQLDA.
-			-- this requires the user to specify that her query is singleton or not, which she don't care to do.
-		isc_expand_dpb() -- only for tube computers.
-		isc_modify_dpb:types{abi=FBABI,ret=p,p,H,s,h} --char**,h*,H,s,h --undocumented
-		isc_free:types{abi=FBABI,ret=i,s} --undocumented
-		isc_vax_integer() -- we use the '<' flag of alien.struct to enforce byte order in structs instead.
-		isc_create_blob{abi=FBABI,ret=i,p,p,p,p,p} --s,s*,dbh*,trh*,bh*,blob_id* (old version, we use isc_create_blob2())
-		isc_event_block_a() -- non-vararg variant of isc_event_block() but not exported in linux
-		BLOB_*() --lots of phantoms in the attic we have no use for
+	Missing functions: (don't worry, they aren't needed)
+
+	isc_print_*() -- we don't print stuff with database APIs in this country
+	isc_interprete() --deprecated in fb 2.0 as dangerous and replaced by fb_interpret().
+	isc_start_transaction() -- same as isc_start_multiple(), but with varargs instead of a TEB array
+	isc_dsql_finish:types{abi=FBABI,ret=i,p} --status,dbh*; said to have no purpose and do nothing
+	isc_dsql_insert:types{abi=FBABI,ret=i,p,p,H,p} --s,s*,sth*,H,xsqlda*; --not documented
+	isc_prepare_transaction() and isc_prepare_transaction2()
+		-- why in Satan's Glorious Name would we ever want to break ACID of a two-phase commit?
+	isc_dsql_allocate_statement:types{abi=FBABI,ret=i,p,p,p} --s,s*,dbh*,sth*
+		-- we instead use isc_dsql_allocate_statement2() which frees all statements automatically
+		upon database detatchment (no biggie).
+	isc_dsql_exec_immed2:types{abi=FBABI,ret=i,p,p,p,H,s,H,p,p} --s,s*,dbh*,trh*,#query,query,dialect,in_xsqlda*,out_xsqlda*
+		-- *can be* used for statements returning a single row of data directly in an XSQLDA.
+		-- you can't use this if you don't know the types and max. sizes of returned values in advance,
+		rendering this function pretty useless.
+	isc_expand_dpb() -- only for tube computers.
+	isc_modify_dpb:types{abi=FBABI,ret=p,p,H,s,h} --char**,h*,H,s,h --undocumented
+	isc_free:types{abi=FBABI,ret=i,s} --undocumented
+	isc_vax_integer() -- we use the '<' flag of alien.struct to enforce byte order in structs instead.
+	isc_create_blob{abi=FBABI,ret=i,p,p,p,p,p} --s,s*,dbh*,trh*,bh*,blob_id* (old version, we use isc_create_blob2())
+	isc_event_block_a() -- non-vararg variant of isc_event_block() but not exported in linux
+	BLOB_*() --lots of phantoms in the attic we have no use for
+
 ]]
 
 module(...,require 'fbclient.init')
@@ -50,15 +51,24 @@ local FBABI = 'stdcall'
 local v,c,i,I,h,H,l,L,p,s,cb =
 	'void','char','int','uint','short','ushort','long','ulong','pointer','string','callback'
 
-function new(libname)
-	local function has_symbol(lib,sym)
-		--TODO: replace this ugly hack with a nice alien built-in symbol test function.
-		return (pcall(function() local _ = lib[sym] end))
-	end
-	local lib = alien.load(libname)
-	getmetatable(lib).__type = 'fbclient.binding'
+function has_symbol(lib,sym)
+	--TODO: replace this ugly hack with a nice alien built-in symbol test function.
+	return (pcall(function() local _ = lib[sym] end))
+end
 
-	--library info
+local alien_library_meta
+
+function is_library(lib)
+	--TODO: replace this hack with a nice alien built-in library test function.
+	return getmetatable(lib) == alien_library_meta
+end
+
+function new(libname)
+	local lib = alien.load(libname)
+	alien_library_meta = getmetatable(lib)
+	alien_library_meta.__type = 'alien library'
+
+	--library info: this only gets you the interbase compatibility version, not the client library version!
 	lib.isc_get_client_version:types{abi=FBABI,ret=v,s}
 	lib.isc_get_client_major_version:types{abi=FBABI,ret=i}
 	lib.isc_get_client_minor_version:types{abi=FBABI,ret=i}
@@ -97,6 +107,7 @@ function new(libname)
 	lib.isc_dsql_describe:types{abi=FBABI,ret=i,p,p,H,p} --s,s*,sth*,1,out_xsqlda*
 	lib.isc_dsql_describe_bind:types{abi=FBABI,ret=i,p,p,H,p} --s,s*,sth*,1,in_xsqlda*
 	lib.isc_dsql_execute:types{abi=FBABI,ret=i,p,p,p,H,p} --s,s*,trh*,sth*,1,in_xsqlda*
+	lib.isc_dsql_execute2:types{abi=FBABI,ret=i,p,p,p,H,p,p} --s,s*,trh*,sth*,1,in_xsqlda*,out_xsqlda*
 	lib.isc_dsql_fetch:types{abi=FBABI,ret=i,p,p,H,p} --s,s*,sth*,1,out_xsqlda*
 	--encoding/decoding data
 	lib.isc_encode_timestamp:types{abi=FBABI,ret=v,s,p} --struct_tm*,isc_timestamp*
@@ -133,7 +144,7 @@ function new(libname)
 	--needed to do what isc_event_block (which is a vararg function which therefore we can't use) should do
 	lib.gds__alloc:types{abi=FBABI,ret=p,l} --block*,size
 	--[[
-	--events: two problem functions: the first is a vararg function so not supported by alien, the second is not available in linux.
+	--events: two problem functions: the first is a vararg function so not supported by alien, the second is not available in Linux.
 	lib.isc_event_block:types{abi='cdecl',ret=l,p,p,H,s,s,s,s,s,s,s,s,s,s,s,s,s,s,s} --bufsize,event_buffer*,result_buffer*,count,name1,name2,...,name15
 	lib.isc_event_block_a:types{abi=FBABI,ret=H,p,p,H,p} --bufsize,event_buffer*,result_buffer*,count,name_buffer**
 	--BSTREAMs: useless layer on top of the blob API

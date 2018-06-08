@@ -1,5 +1,5 @@
 --[[
-	DPB (Database Parameter Block) structure: encode the options for connecting to a database.
+	DPB (Database Parameter Block) structure: encode the options for connecting to a database
 
 	encode(dpb_options_t) -> DPB encoded string.
 

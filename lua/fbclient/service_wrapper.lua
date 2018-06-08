@@ -1,5 +1,5 @@
 --[=[
-	Service Manager API wrapper.
+	Service Manager API wrapper
 	Based on the latest jrd/ibase.h and jrd/svc.cpp located at:
 		http://firebird.cvs.sourceforge.net/viewvc/*checkout*/firebird/firebird2/src/jrd/ibase.h
 		http://firebird.cvs.sourceforge.net/viewvc/*checkout*/firebird/firebird2/src/jrd/svc.cpp
@@ -69,7 +69,7 @@ local function attach_spb_encode(opts)
 end
 
 function attach(fbapi, sv, svcname, opts)
-	local svh = alien.buffer(alien.sizeof('pointer'))
+	local svh = alien.buffer(POINTER_SIZE)
 	svh:set(1,nil,'pointer') --important!
 	local spb_s = attach_spb_encode(opts)
 	fbtry(fbapi, sv, 'isc_service_attach', #svcname, svcname, svh, spb_s and #spb_s or 0, spb_s)
@@ -220,6 +220,14 @@ local isc_action_svc_backup_codes = {
 	isc_spb_options		= 108, --bitmask isc_action_svc_backup_bits
 	isc_spb_bkp_file	=   5, --either filename or {filename1,length1,filename2,length2,...,filenameN}
 	isc_spb_bkp_factor	=   6, --blocking size for tape drives, whatever that means
+}
+
+isc_action_svc_backup_option_order = {
+	'isc_spb_dbname',
+	'isc_spb_verbose',
+	'isc_spb_options',
+	'isc_spb_bkp_file',
+	'isc_spb_bkp_factor',
 }
 
 local isc_action_svc_backup_bits = {
@@ -623,6 +631,7 @@ local action_options_order_tables = {
 	isc_action_svc_modify_user  = isc_action_svc_modify_user_option_order,
 	isc_action_svc_delete_user  = isc_action_svc_delete_user_option_order,
 	isc_action_svc_display_user = isc_action_svc_display_user_option_order,
+	isc_action_svc_backup       = isc_action_svc_backup_option_order,
 }
 
 function start(fbapi, sv, svh, action, opts)
@@ -632,6 +641,7 @@ function start(fbapi, sv, svh, action, opts)
 	local opt_encoders = asserts(action_options_encoders[action],'option encoders table missing for action %s',action)
 
 	opts = opts or {}
+
 	--if no order is imposed, make opt_list out of opts keys.
 	--keys() always return an ipair()'able array since tables can't have nil keys
 	local opt_list = action_options_order_tables[action] or keys(opts)
@@ -710,6 +720,16 @@ local info_buf_sizes = {
 	isc_info_svc_get_users			= MAX_USHORT,
 }
 
+local info_end_codes = {
+	isc_info_end             = 1,  --normal ending
+	isc_info_truncated       = 2,  --receiving buffer too small
+	isc_info_error           = 3,  --error, check status vector
+	isc_info_data_not_ready  = 4,  --data not available for some reason
+	isc_info_svc_timeout     = 64, --timeout expired
+}
+
+local info_end_code_lookup = index(info_end_codes)
+
 --decoders used in the info buffer filled by query()
 
 local function decode_uint(buf,size,ofs)
@@ -756,21 +776,24 @@ local function decode_cluster(option, codes, decoders)
 	end
 end
 
---used by isc_info_svc_limbo_trans and isc_info_svc_get_users (decode_cluster() should've worked but, oh well)
-local function decode_magic_cluster(option, codes, decoders)
+--only used by isc_info_svc_get_users and isc_info_svc_limbo_trans
+--the difference to decode_cluster() is that you get the data length at the
+--beginning instead of, or in addition to terminating isc_info_flag_end code
+local function decode_sized_cluster(option, codes, decoders)
 	local code_index = index(codes)
+	local isc_info_flag_end = 127
 	return function(buf,size,ofs)
 		local t = {}
-		local loop, code
-		loop, ofs = struct.unpack('<H',buf,size,ofs) --the sole purpose of this is inconsistence.
-		loop = loop+1-SHORT_SIZE
-		local last_code = loop <= 0
-		while not last_code do
-			assert(ofs <= size, 'unexpected end of info buffer')
-			last_code = ofs == loop
+		local code
+		local initial_ofs = ofs
+		local actual_size,ofs = struct.unpack('<H',buf,size,ofs)
+		while ofs-initial_ofs <= actual_size do
 			code,ofs = struct.unpack('B',buf,size,ofs)
+			if code == isc_info_flag_end then
+				break
+			end
 			local code_name = asserts(code_index[code],'invalid code %d returned by server for option %s',code,option)
-			local decoder = asserts(decoders[code_name],'missing decoder for option %s attribute %s',option,code_name)
+			local decoder = asserts(decoders[code_name],'missing decoder for code %s.%s',option,code_name)
 			local a = t[code_name] or {}
 			a[#a+1],ofs = decoder(buf,size,ofs)
 			t[code_name] = a
@@ -785,8 +808,7 @@ local function decode_bitmask(bits)
 		local n,ofs = struct.unpack('<I',buf,size,ofs)
 		local t = {}
 		for mask,name in pairs(bits_index) do
-			--the following trick makes for the absense of binary AND (read mask*2 as mask << 1)
-			t[name] = n % (mask*2) - n % mask ~= 0
+			t[name] = n % (mask*2) - n % mask ~= 0 --slightly ugly trick in absence of binary operators
 		end
 		return t,ofs
 	end
@@ -934,9 +956,9 @@ local info_decoders = {
 	isc_info_svc_line				= decode_string,
 	isc_info_svc_to_eof				= decode_string,
 	isc_info_svc_get_licensed_users	= decode_uint,
-	isc_info_svc_limbo_trans		= decode_magic_cluster('isc_info_svc_limbo_trans', limbo_trans_codes, limbo_trans_decoders),
+	isc_info_svc_limbo_trans		= decode_sized_cluster('isc_info_svc_limbo_trans', limbo_trans_codes, limbo_trans_decoders),
 	isc_info_svc_running			= decode_uint_bool,
-	isc_info_svc_get_users			= decode_magic_cluster('isc_info_svc_get_users', get_users_codes, get_users_decoders),
+	isc_info_svc_get_users			= decode_sized_cluster('isc_info_svc_get_users', get_users_codes, get_users_decoders),
 }
 
 local function info_request_encode(opts)
@@ -950,16 +972,6 @@ local function info_request_encode(opts)
 	end
 	return s,len
 end
-
-info_end_codes = {
-	isc_info_end             = 1,  --normal ending
-	isc_info_truncated       = 2,  --receiving buffer too small
-	isc_info_error           = 3,  --error, check status vector
-	isc_info_data_not_ready  = 4,  --data not available for some reason
-	isc_info_svc_timeout     = 64, --timeout expired
-}
-
-local info_end_code_lookup = index(info_end_codes)
 
 local function info_buf_decode(buf, size)
 	local t = {}
@@ -988,6 +1000,7 @@ function query(fbapi, sv, svh, request_opts, sbp_opts, buf, buf_size)
 	local req_s, computed_buf_size = info_request_encode(request_opts)
 	if buf then
 		asserts(buf_size >= 1, 'buffer too small, min. size is %d bytes',1)
+		--since we can't fill a larger buffer, better tell the user than dissilusion him later
 		asserts(buf_size <= MAX_USHORT, 'buffer too large, max. size is %d bytes',MAX_USHORT)
 	else
 		buf_size = math.min(computed_buf_size, MAX_USHORT)

@@ -5,13 +5,13 @@
 	new(globals_t) -> init_f; function to pass to module() as discussed below.
 	import(module_table | module_name) -> import a module's members into the caller's environment.
 
-	Calling module(...,init_f) changes environment in which module() is called to an Y-valve kinda table which:
-		- reads from table P, which in turn inherits table globals,
+	Calling module(...,init_f) changes environment in which module() is called to a table which:
+		- reads from table P, which in turn inherits table globals_t,
 		- writes to both P and M,
 	where M is the module's public interface table, and P is the module's private environment table.
 
 	With this simple trick we get:
-		- table globals gets inherited in the environment of all modules, so just add any hard
+		- table globals_t gets inherited in the environments of the module, so just add any hard
 		dependencies im this public table.
 		- no access to the real global environment, so no worry about module() polluting it (*)
 		- any assignment of a global variable goes into module's public interface table.
@@ -19,8 +19,13 @@
 	is a good thing (it's how module() should behave anyway).
 
 	LIMITATIONS:
-	- the module's environment is not directly reflexive anymore (can't use pairs() on it).
-	- at 4 tables and a closure per module this is kinda bloated.
+	- the module's private environment is not directly reflexive anymore as it uses inheritance.
+	- this scheme is arguably bloated, as each module needs:
+		- 4 tables (including metatables)
+		- one closure
+		- duplicating all public elements in the private table
+		- 1 indirection for accessing module symbols from inside the module
+		- 2 indirections for accessing globals
 
 ]]
 
